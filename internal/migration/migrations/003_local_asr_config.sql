@@ -5,7 +5,7 @@ CREATE TABLE `local_asr_config` (
     `subject_id`      VARCHAR(100) NOT NULL COMMENT '用户标识',
     `scope_type`      VARCHAR(50)  NOT NULL COMMENT '作用域类型',
     `scope_id`        VARCHAR(100) NOT NULL COMMENT '作用域 ID',
-    `enabled`         TINYINT      NOT NULL DEFAULT 0 COMMENT '是否启用本地 ASR',
+    `enabled`         TINYINT      NOT NULL DEFAULT 1 COMMENT '是否启用本地 ASR',
     `timeout_ms`      INT          NULL COMMENT '本地模型超时(ms)',
     `probe_url`       VARCHAR(500) NULL COMMENT '健康检查 URL',
     `transcribe_url`  VARCHAR(500) NULL COMMENT '转写 URL',
