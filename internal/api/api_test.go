@@ -1271,3 +1271,236 @@ func TestTranscribeHandler_MaxUploadSize(t *testing.T) {
 		t.Errorf("unexpected msg: %v", resp["msg"])
 	}
 }
+
+func setupLocalConfigRouter() (*gin.Engine, *LocalConfigHandler) {
+	cfg := &config.Config{
+		LocalEnabled:       false,
+		LocalTimeoutMs:     10000,
+		LocalProbeURL:      "http://localhost:8787/",
+		LocalTranscribeURL: "http://localhost:8787/v1/voice/transcribe",
+	}
+	localStore := store.NewLocalConfigStore(nil, cfg)
+	h := NewLocalConfigHandler(localStore)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("app_id", "test-app")
+		c.Next()
+	})
+	r.PUT("/v1/speech/local-config", h.Put)
+	r.GET("/v1/speech/local-config", h.Get)
+	r.DELETE("/v1/speech/local-config", h.Delete)
+	return r, h
+}
+
+func TestLocalConfigHandler_PutValidation(t *testing.T) {
+	r, _ := setupLocalConfigRouter()
+
+	tests := []struct {
+		name string
+		body string
+		want int
+		msg  string
+	}{
+		{
+			"invalid json",
+			`{bad`,
+			400,
+			"invalid request body",
+		},
+		{
+			"missing subject_id",
+			`{"scope_type":"global","scope_id":"default","enabled":true}`,
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"missing scope_type",
+			`{"subject_id":"user1","scope_id":"default","enabled":true}`,
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"missing scope_id",
+			`{"subject_id":"user1","scope_type":"global","enabled":true}`,
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"invalid scope_type",
+			`{"subject_id":"user1","scope_type":"invalid","scope_id":"default","enabled":true}`,
+			400,
+			"invalid scope_type, expected: global, space, org, project",
+		},
+		{
+			"missing enabled",
+			`{"subject_id":"user1","scope_type":"global","scope_id":"default"}`,
+			400,
+			"enabled is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest("PUT", "/v1/speech/local-config",
+				strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(w, req)
+
+			if w.Code != tt.want {
+				t.Errorf("expected %d, got %d: %s", tt.want, w.Code, w.Body.String())
+			}
+
+			var resp map[string]interface{}
+			json.Unmarshal(w.Body.Bytes(), &resp)
+			if resp["msg"] != tt.msg {
+				t.Errorf("expected msg %q, got %v", tt.msg, resp["msg"])
+			}
+		})
+	}
+}
+
+func TestLocalConfigHandler_GetValidation(t *testing.T) {
+	r, _ := setupLocalConfigRouter()
+
+	tests := []struct {
+		name string
+		url  string
+		want int
+		msg  string
+	}{
+		{
+			"missing all params",
+			"/v1/speech/local-config",
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"missing scope_type",
+			"/v1/speech/local-config?subject_id=u1&scope_id=s1",
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"missing scope_id",
+			"/v1/speech/local-config?subject_id=u1&scope_type=global",
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"invalid scope_type",
+			"/v1/speech/local-config?subject_id=u1&scope_type=bad&scope_id=s1",
+			400,
+			"invalid scope_type, expected: global, space, org, project",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", tt.url, nil)
+			r.ServeHTTP(w, req)
+
+			if w.Code != tt.want {
+				t.Errorf("expected %d, got %d: %s", tt.want, w.Code, w.Body.String())
+			}
+
+			var resp map[string]interface{}
+			json.Unmarshal(w.Body.Bytes(), &resp)
+			if resp["msg"] != tt.msg {
+				t.Errorf("expected msg %q, got %v", tt.msg, resp["msg"])
+			}
+		})
+	}
+}
+
+func TestLocalConfigHandler_GetDefaultValues(t *testing.T) {
+	cfg := &config.Config{
+		LocalEnabled:       false,
+		LocalTimeoutMs:     10000,
+		LocalProbeURL:      "http://localhost:8787/",
+		LocalTranscribeURL: "http://localhost:8787/v1/voice/transcribe",
+	}
+	localStore := store.NewLocalConfigStore(nil, cfg)
+	h := NewLocalConfigHandler(localStore)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("app_id", "")
+		c.Next()
+	})
+	r.GET("/v1/speech/local-config", h.Get)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/v1/speech/local-config?subject_id=u1&scope_type=global&scope_id=default", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp["enabled"] != false {
+		t.Errorf("expected enabled false, got %v", resp["enabled"])
+	}
+	if resp["timeout_ms"] != float64(10000) {
+		t.Errorf("expected timeout_ms 10000, got %v", resp["timeout_ms"])
+	}
+	if resp["probe_url"] != "http://localhost:8787/" {
+		t.Errorf("expected default probe_url, got %v", resp["probe_url"])
+	}
+	if resp["transcribe_url"] != "http://localhost:8787/v1/voice/transcribe" {
+		t.Errorf("expected default transcribe_url, got %v", resp["transcribe_url"])
+	}
+}
+
+func TestLocalConfigHandler_DeleteValidation(t *testing.T) {
+	r, _ := setupLocalConfigRouter()
+
+	tests := []struct {
+		name string
+		url  string
+		want int
+		msg  string
+	}{
+		{
+			"missing all params",
+			"/v1/speech/local-config",
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"missing subject_id",
+			"/v1/speech/local-config?scope_type=global&scope_id=default",
+			400,
+			"subject_id, scope_type, and scope_id are required",
+		},
+		{
+			"invalid scope_type",
+			"/v1/speech/local-config?subject_id=u1&scope_type=bad&scope_id=s1",
+			400,
+			"invalid scope_type, expected: global, space, org, project",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest("DELETE", tt.url, nil)
+			r.ServeHTTP(w, req)
+
+			if w.Code != tt.want {
+				t.Errorf("expected %d, got %d: %s", tt.want, w.Code, w.Body.String())
+			}
+
+			var resp map[string]interface{}
+			json.Unmarshal(w.Body.Bytes(), &resp)
+			if resp["msg"] != tt.msg {
+				t.Errorf("expected msg %q, got %v", tt.msg, resp["msg"])
+			}
+		})
+	}
+}
